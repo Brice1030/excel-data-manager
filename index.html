@@ -620,6 +620,7 @@
                         <button class="btn btn-primary" onclick="undo()">↶ Undo</button>
                         <button class="btn btn-primary" onclick="redo()">↷ Redo</button>
                         <button class="btn btn-success" onclick="formatCurrency()">💰 Currency</button>
+                        <button class="btn btn-success" onclick="addCalculation()">🧮 Calculate</button>
                         <button class="btn btn-danger" onclick="clearData()">🗑️ Clear All</button>
                     </div>
 
@@ -756,7 +757,12 @@
                         <thead>
                             <tr>
                                 <th style="width: 40px;">#</th>
-                                ${columns.map((col, index) => `<th draggable="true" ondragstart="dragStart(event, ${index})" ondragover="allowDrop(event)" ondrop="dropColumn(event, ${index})" style="cursor: move;">${col} <button class="sort-btn" onclick="sortBy('${col}')">↕️</button> <button class="sort-btn" onclick="deleteColumn('${col}')" style="color: #EF4444;">✕</button></th>`).join('')}
+                                ${columns.map((col, index) => {
+                                    const hasCalc = calculations[col];
+                                    const calcIcon = hasCalc ? ' 🧮' : '';
+                                    const calcTitle = hasCalc ? `Formula: ${hasCalc.formula}` : '';
+                                    return `<th draggable="true" ondragstart="dragStart(event, ${index})" ondragover="allowDrop(event)" ondrop="dropColumn(event, ${index})" style="cursor: move;" title="${calcTitle}">${col}${calcIcon} <button class="sort-btn" onclick="sortBy('${col}')">↕️</button> ${hasCalc ? `<button class="sort-btn" onclick="removeCalculation('${col}')" style="color: #FFA500;" title="Remove calculation">🧮</button>` : ''} <button class="sort-btn" onclick="deleteColumn('${col}')" style="color: #EF4444;">✕</button></th>`;
+                                }).join('')}
                                 <th style="width: 150px;">Actions</th>
                             </tr>
                         </thead>
@@ -841,7 +847,40 @@
             if (record) {
                 record[column] = value;
                 validateCell(record, column, value);
+                
+                // Check for calculations that depend on this column
+                applyCalculations(record);
             }
+        }
+
+        function applyCalculations(record) {
+            Object.keys(calculations).forEach(targetColumn => {
+                const calc = calculations[targetColumn];
+                try {
+                    let formula = calc.formula;
+                    
+                    // Replace column references with actual values
+                    calc.dependencies.forEach(depColumn => {
+                        const value = parseFloat(record[depColumn]) || 0;
+                        formula = formula.replace(new RegExp(`\\b${depColumn}\\b`, 'g'), value);
+                    });
+                    
+                    // Evaluate the formula
+                    const result = eval(formula);
+                    if (!isNaN(result)) {
+                        record[targetColumn] = result.toFixed(2);
+                        
+                        // Update the input field in the UI
+                        const input = document.querySelector(`input[onchange*="${record._id}"][onchange*="${targetColumn}"]`);
+                        if (input) {
+                            input.value = result.toFixed(2);
+                            input.style.backgroundColor = 'rgba(34, 197, 94, 0.1)';
+                        }
+                    }
+                } catch (e) {
+                    console.error('Calculation error:', e);
+                }
+            });
         }
 
         function validateCell(record, column, value) {
@@ -1365,6 +1404,7 @@
             }
             
             filteredData = [...currentData];
+            calculations = {}; // Reset calculations for new file
             setupInterface();
             displayData();
             showSuccess(`Created new file with ${columns.length} columns and 5 empty rows`);
@@ -1373,6 +1413,7 @@
         let draggedColumnIndex = -1;
         let undoStack = [];
         let redoStack = [];
+        let calculations = {}; // Store column calculations
 
         function saveState() {
             undoStack.push(JSON.stringify({columns: [...columns], data: [...currentData]}));
@@ -1616,6 +1657,52 @@
             a.click();
             URL.revokeObjectURL(url);
             showSuccess('SQL file downloaded');
+        }
+
+        function addCalculation() {
+            if (currentData.length === 0) {
+                showError('No data available for calculations');
+                return;
+            }
+            
+            const targetColumn = prompt('Enter column name to calculate (result column):');
+            if (!targetColumn || !columns.includes(targetColumn)) {
+                showError('Invalid column name');
+                return;
+            }
+            
+            const availableColumns = columns.filter(col => col !== targetColumn);
+            const formula = prompt(`Enter formula using column names:\nAvailable columns: ${availableColumns.join(', ')}\n\nExample: ColumnA + ColumnB * 2`);
+            
+            if (!formula) return;
+            
+            // Extract column dependencies from formula
+            const dependencies = availableColumns.filter(col => 
+                new RegExp(`\\b${col}\\b`).test(formula)
+            );
+            
+            if (dependencies.length === 0) {
+                showError('Formula must reference at least one column');
+                return;
+            }
+            
+            // Store the calculation
+            calculations[targetColumn] = {
+                formula: formula,
+                dependencies: dependencies
+            };
+            
+            // Apply calculation to all existing records
+            currentData.forEach(record => applyCalculations(record));
+            filteredData = [...currentData];
+            displayData();
+            
+            showSuccess(`Added calculation: ${targetColumn} = ${formula}`);
+        }
+
+        function removeCalculation(column) {
+            delete calculations[column];
+            showSuccess(`Removed calculation for ${column}`);
         }
     </script>
 </body>
